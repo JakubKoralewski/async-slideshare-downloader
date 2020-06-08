@@ -1,61 +1,64 @@
 #!/usr/bin/env python
-#-*- coding: utf-8 -*-
-import sys, os
+# -*- coding: utf-8 -*-
+# https://askubuntu.com/a/1004158
+import sys
 import img2pdf
-import re
+from pathlib import Path
+import asyncio
+import aiohttp
 
-from time import localtime, strftime
-from os import listdir, walk
-from os.path import isfile, join
+from bs4 import BeautifulSoup  # python3
 
-try: from urllib.request import urlopen #python3
-except ImportError: from urllib2 import urlopen #python2
-try: from bs4 import BeautifulSoup #python3
-except ImportError: from BeautifulSoup import BeautifulSoup #python2
-try: input = raw_input #python2
-except NameError: pass #python3
+CURRENT = Path(__file__).parent
+OUTPUT = CURRENT / "pdf_images"
 
-CURRENT = os.path.dirname(__file__)
 
-def download_images(url):
-    html = urlopen(url).read()
-    soup = BeautifulSoup(html)
-    title = '_'.join(( 'pdf_images', strftime("%Y/%m/%d_%H:%M:%S", localtime()) ))  #soup.title.string
-    images = soup.findAll('img', {'class':'slide_image'})
+async def fetch_image(session, url, index):
+    print(f"fetching {url}")
+    async with session.get(url) as response:
+        bytes = await response.read()
+        return index, bytes
 
-    for image in images:
-        image_url = image.get('data-full').split('?')[0]
-        command = "wget '%s' -P '%s' --no-check-certificate" % (image_url, title)
-        os.system(command)
 
-    convert_pdf(title)
+async def download_images(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            html = await response.text()
+            soup = BeautifulSoup(html, features="html.parser")
+            images = soup.findAll('img', {'class': 'slide_image'})
+            tasks = []
+            slide_folder = OUTPUT / url.split('/')[-1]
+            slides_output = slide_folder / "slides"
 
-def convert_pdf(img_dir_name):
-    f = []
-    for (dirpath, dirnames, filenames) in walk(join(CURRENT, img_dir_name)):
-        f.extend(filenames)
-        break
-    f = ["%s/%s" % (img_dir_name, x) for x in f]
-    
-    def atoi(text):
-        return int(text) if text.isdigit() else text
+            for i, image in enumerate(images):
+                image_file = slides_output / f"{i}.jpg"
+                if image_file.exists():
+                    continue
+                image_url = image.get('data-full').split('?')[0]
+                task = asyncio.ensure_future(fetch_image(session, image_url, i))
+                tasks.append(task)
 
-    def natural_keys(text):
-        '''
-        alist.sort(key=natural_keys) sorts in human order
-        http://nedbatchelder.com/blog/200712/human_sorting.html
-        (See Toothy's implementation in the comments)
-        '''
-        return [ atoi(c) for c in re.split('(\d+)', text) ]
+            for coro in asyncio.as_completed(tasks):
+                i, image = await coro
+                if not slides_output.exists():
+                    slides_output.mkdir(parents=True)
+                image_file = slides_output / f"{i}.jpg"
+                print(f"Writing image of slide number {i} to {image_file.relative_to(CURRENT)}")
+                image_file.write_bytes(image)
+            pdf_file = slide_folder / (slide_folder.name + ".pdf")
+            convert_pdf(slides_output, pdf_file)
 
-    f.sort(key=natural_keys)
-    
+
+def convert_pdf(img_dir: Path, pdf_file: Path):
+    f = [x for x in img_dir.iterdir()]
+    f.sort(key=lambda x: x.name)
+    f = [x.open('rb') for x in f]
     print(f)
 
     pdf_bytes = img2pdf.convert(f, dpi=300, x=None, y=None)
-    doc = open(pdf_f, 'wb')
-    doc.write(pdf_bytes)
-    doc.close()
+    pdf_file.write_bytes(pdf_bytes)
+    [x.close() for x in f]
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -66,12 +69,6 @@ if __name__ == "__main__":
         url = url[1:-1]
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
-    pdf_f = re.sub('[^0-9a-zA-Z]+', '_', url.split("/")[-1]) #get url basename and replace non-alpha with '_'
-    if pdf_f.strip() == '':
-        print("Something wrong to get filename from URL, fallback to result.pdf")
-        pdf_f = "result.pdf"
-    else:
-        pdf_f+=".pdf"
-    download_images(url)
 
-
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(download_images(url))

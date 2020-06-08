@@ -1,15 +1,14 @@
 # Slideshare Downloader
 
+This is a modified version of @limkokhole's/@yodiaditya's [slideshare-downloader](https://github.com/yodiaditya/slideshare-downloader.git)
+which uses async, aiohttp to speed stuff up.
+
 This python script to download slide from Slideshare and converted into pdf automatically.
 
 ## How to setup
     git clone https://github.com/limkokhole/slideshare-downloader.git
 
-    pip2 install -r requirements_py2.txt #python 2
-
-    OR
-
-    pip3 install -r requirements_py3.txt #python 3
+    pip3 install -r requirements.txt 
 
 ## How to run
 
